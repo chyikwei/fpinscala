@@ -47,19 +47,95 @@ object List { // `List` companion object. Contains functions for creating and wo
     foldRight(ns, 1.0)(_ * _) // `_ * _` is more concise notation for `(x,y) => x * y`; see sidebar
 
 
-  def tail[A](l: List[A]): List[A] = sys.error("todo")
+  def tail[A](l: List[A]): List[A] = {
+    l match {
+      case Nil => sys.error("empty list")
+      case Cons(_, t) => t
+    }
+  }
 
-  def setHead[A](l: List[A], h: A): List[A] = sys.error("todo")
+  def setHead[A](l: List[A], h: A): List[A] = {
+    l match {
+      case Nil => sys.error("empty list")
+      case Cons(_, t) => Cons(h, t)
+    }
+  }
 
-  def drop[A](l: List[A], n: Int): List[A] = sys.error("todo")
+  def drop[A](l: List[A], n: Int): List[A] = {
+    if(n <= 0) l
+    else drop(tail(l), n - 1)
+  }
 
-  def dropWhile[A](l: List[A], f: A => Boolean): List[A] = sys.error("todo")
+  def dropWhile[A](l: List[A], f: A => Boolean): List[A] = {
+    l match {
+      case Nil => Nil
+      case Cons(h, t) => if(f(h)) dropWhile(t, f) else l
+    }
+  }
 
-  def init[A](l: List[A]): List[A] = sys.error("todo")
+  def init[A](l: List[A]): List[A] = {
+    l match {
+      case Nil => sys.error("empty list")
+      case Cons(h, Nil) => Nil
+      case Cons(h, t) => Cons(h, init(t))
+    }
+  }
 
-  def length[A](l: List[A]): Int = sys.error("todo")
+  def length[A](l: List[A]): Int = {
+    foldRight(l, 0) ((a, b) =>b + 1)
+  }
 
-  def foldLeft[A,B](l: List[A], z: B)(f: (B, A) => B): B = sys.error("todo")
+  def foldLeft[A,B](l: List[A], z: B)(f: (B, A) => B): B = {
+    l match {
+      case Nil => z
+      case Cons(h, t) => foldLeft(t, f(z, h))(f)
+    }
+  }
 
-  def map[A,B](l: List[A])(f: A => B): List[B] = sys.error("todo")
+  def sum3(l: List[Int]) = foldLeft(l, 0) (_ + _)
+
+  def product3(l: List[Double]) = foldLeft(l, 1.0) (_ * _)
+
+  def length2[A](l: List[A]): Int = foldLeft(l, 0) ((a, b) => a + 1)
+
+  def reverse[A](l: List[A]): List[A] = {
+      foldLeft(l, List[A]())((acc, h) => Cons(h, acc))
+  }
+
+  def append2[A](l: List[A], a: List[A]): List[A] = {
+    foldRight(l, a) ((item, acc) => Cons(item, acc))
+  }
+
+  def concat[A](l: List[List[A]]): List[A] = {
+    foldLeft(l, List[A]()) ((acc, item) => append2(acc, item))
+  }
+
+  def add1(l: List[Int]): List[Int] = {
+    map(l)(_ + 1)
+  }
+
+  def doubleToStr(l: List[Double]): List[String] = {
+    map(l)(_.toString)
+  }
+
+  def map[A,B](l: List[A])(f: A => B): List[B] = {
+    foldLeft(l, List[B]())((acc, item) => Cons(f(item), acc))
+  }
+
+  def flatMap[A,B](l: List[A])(f: A => List[B]): List[B] = {
+    foldLeft(l, List[B]()) ((acc, item) => append(acc, f(item)))
+  }
+
+  def filterByFlapMap[A](l: List[A])(f: A => Boolean): List[A] = {
+    flatMap(l)(item => if(f(item)) List(item) else Nil)
+  }
+
+  def add2(a: List[Int], b: List[Int]): List[Int] = {
+    (a, b) match {
+      case (_, Nil) => Nil
+      case (Nil, _) => Nil
+      case (Cons(ah, at), Cons(bh, bt)) => Cons(ah + bh, add2(at, bt))
+    }
+  }
+
 }
