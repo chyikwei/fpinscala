@@ -131,7 +131,13 @@ case class State[S,+A](run: S => (A, S)) {
   }
 
   def map2[B,C](sb: State[S, B])(f: (A, B) => C): State[S, C] = {
-    flatMap(a => (sb.map(b => f(a, b))))
+    State(
+      s => {
+        val (a, s1) = run(s)
+        val (b, s2) = sb.run(s1)
+        unit(f(a,b)).run(s2)
+      }
+    )
   }
   
   //from solution
