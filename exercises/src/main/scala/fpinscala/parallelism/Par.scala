@@ -29,10 +29,31 @@ object Par {
       def call = a(es).get
     })
 
+  def lazyUnit[A](a: => A): Par[A] = fork(unit(a))
+
+  //7.4
+  def asyncF[A,B](f: A => B): A => Par[B] = x => lazyUnit(f(x))
+
   def map[A,B](pa: Par[A])(f: A => B): Par[B] = 
     map2(pa, unit(()))((a,_) => f(a))
 
   def sortPar(parList: Par[List[Int]]) = map(parList)(_.sorted)
+
+  //7.5
+  def sequence[A](ps: List[Par[A]]): Par[List[A]] = {
+    ps.foldRight(unit(List[A]()))((elem, cum) => map2(elem, cum)(_ :: _))
+  }
+
+  def parMap[A,B](ps: List[A])(f: A => B): Par[List[B]] = fork {
+    val fbs: List[Par[B]] = ps.map(asyncF(f))
+    sequence(fbs)
+  }
+
+  //7.6
+  def parFilter[A](ps: List[A])(f: A => Boolean): Par[List[A]] = {
+    val fbs: List[Par[List[A]]] = ps.map(asyncF(x => if (f(x)) List(x) else List[A]()))
+    map(sequence(fbs))(_.flatten)
+  }
 
   def equal[A](e: ExecutorService)(p: Par[A], p2: Par[A]): Boolean = 
     p(e).get == p2(e).get
@@ -45,6 +66,42 @@ object Par {
       if (run(es)(cond).get) t(es) // Notice we are blocking on the result of `cond`.
       else f(es)
 
+  //7.11
+  def choiceN[A](cond: Par[Int])(options: List[Par[A]]): Par[A] = es => {
+    val c = run(es)(cond).get
+    options(c)(es)
+  }
+
+  def choice2[A](cond: Par[Boolean])(t: Par[A], f: Par[A]): Par[A] =
+    choiceN(map(cond)(x => if (x) 0 else 1))(List(t, f))
+
+  //7.12
+  def choiceMap[K,V](key: Par[K])(choices: Map[K, Par[V]]): Par[V] = es => {
+    val k = run(es)(key).get
+    choices(k)(es)
+  }
+
+  //7.13
+  def chooser[A,B](pa: Par[A])(choices: A => Par[B]): Par[B] = es => {
+    val k = run(es)(pa).get
+    choices(k)(es)
+  }
+
+  //7.14
+  def flatMap[A,B](a: Par[A])(f: A => Par[B]): Par[B] = es => {
+    val aa = run(es)(a).get
+    f(aa)(es)
+  }
+
+  def join[A](a: Par[Par[A]]): Par[A] = es => {
+    val aa = run(es)(a).get
+    aa(es)
+  }
+
+  def flatMapByJ[A,B](a: Par[A])(f: A => Par[B]): Par[B] = join(map(a)(f))
+
+  def joinByFM[A](a: Par[Par[A]]): Par[A] = flatMap(a)(x => x)
+
   /* Gives us infix syntax for `Par`. */
   implicit def toParOps[A](p: Par[A]): ParOps[A] = new ParOps(p)
 
@@ -56,12 +113,13 @@ object Par {
 
 object Examples {
   import Par._
-  def sum(ints: IndexedSeq[Int]): Int = // `IndexedSeq` is a superclass of random-access sequences like `Vector` in the standard library. Unlike lists, these sequences provide an efficient `splitAt` method for dividing them into two parts at a particular index.
+  def sum(ints: IndexedSeq[Int]): Par[Int] = // `IndexedSeq` is a superclass of random-access sequences like `Vector` in the standard library. Unlike lists, these sequences provide an efficient `splitAt` method for dividing them into two parts at a particular index.
     if (ints.size <= 1)
-      ints.headOption getOrElse 0 // `headOption` is a method defined on all collections in Scala. We saw this function in chapter 3.
+      Par.unit(ints.headOption getOrElse 0) // `headOption` is a method defined on all collections in Scala. We saw this function in chapter 3.
     else { 
       val (l,r) = ints.splitAt(ints.length/2) // Divide the sequence in half using the `splitAt` function.
-      sum(l) + sum(r) // Recursively sum both halves and add the results together.
-    }
+      Par.map2(Par.fork(sum(l)), Par.fork(sum(r)))(_ + _)
 
+      //sum(l) + sum(r) // Recursively sum both halves and add the results together.
+    }
 }
