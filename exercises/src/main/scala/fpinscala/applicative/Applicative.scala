@@ -11,28 +11,63 @@ import language.implicitConversions
 
 trait Applicative[F[_]] extends Functor[F] {
 
-  def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => C): F[C] = ???
+  //12.2
+  def map2[A,B,C](fa: F[A], fb: F[B])(f: (A, B) => C): F[C] = 
+    apply(map(fa)(f.curried))(fb)
 
-  def apply[A,B](fab: F[A => B])(fa: F[A]): F[B] = ???
+  def apply[A,B](fab: F[A => B])(fa: F[A]): F[B] =
+    map2(fab, fa)((fab, fa) => fab(fa))
 
   def unit[A](a: => A): F[A]
 
   def map[A,B](fa: F[A])(f: A => B): F[B] =
     apply(unit(f))(fa)
 
-  def sequence[A](fas: List[F[A]]): F[List[A]] = ???
+  //12.3
+  def map3[A,B,C,D](fa: F[A], fb: F[B], fc: F[C])(f: (A, B, C) => D): F[D] = 
+    apply(apply(map(fa)(f.curried))(fb))(fc)
 
-  def traverse[A,B](as: List[A])(f: A => F[B]): F[List[B]] = ???
+  def map4[A,B,C,D,E](fa: F[A], fb: F[B], fc: F[C], fd: F[D])(f: (A, B, C, D) => E): F[E] = 
+    apply(apply(apply(map(fa)(f.curried))(fb))(fc))(fd)
 
-  def replicateM[A](n: Int, fa: F[A]): F[List[A]] = ???
 
-  def factor[A,B](fa: F[A], fb: F[B]): F[(A,B)] = ???
+  def sequence[A](fas: List[F[A]]): F[List[A]] =
+    traverse(fas)(fa => fa)
 
-  def product[G[_]](G: Applicative[G]): Applicative[({type f[x] = (F[x], G[x])})#f] = ???
+  def traverse[A,B](as: List[A])(f: A => F[B]): F[List[B]] =
+    as.foldRight(unit(List[B]()))((a, fbs) => map2(f(a), fbs)(_ :: _))
 
-  def compose[G[_]](G: Applicative[G]): Applicative[({type f[x] = F[G[x]]})#f] = ???
+  def replicateM[A](n: Int, fa: F[A]): F[List[A]] =
+    sequence(List.fill(n)(fa))
 
-  def sequenceMap[K,V](ofa: Map[K,F[V]]): F[Map[K,V]] = ???
+  def factor[A,B](fa: F[A], fb: F[B]): F[(A,B)] =
+    map2(fa, fb)((_, _))
+
+  //12.8
+  def product[G[_]](G: Applicative[G]): Applicative[({type f[x] = (F[x], G[x])})#f] = {
+    val self = this
+    new Applicative[({type f[x] = (F[x], G[x])})#f] {
+      def unit[A](a: => A) = (self.unit(a), G.unit(a))
+
+      override def apply[A, B](fab: (F[A => B], G[A => B]))(fa: (F[A], G[A])) = 
+        (self.apply(fab._1)(fa._1), G.apply(fab._2)(fa._2))
+    }
+  }
+
+  //12.9
+  def compose[G[_]](G: Applicative[G]): Applicative[({type f[x] = F[G[x]]})#f] = {
+    val self = this
+    new Applicative[({type f[x] = F[G[x]]})#f] {
+      def unit[A](a: => A) = self.unit(G.unit(a))
+      override def apply[A, B](fgab: F[G[A => B]])(fga: F[G[A]]) = 
+        //this.map2(fgab, fga)((gab: G[A => B], ga: G[A]) => G.map2(gab, ga)((ab, a) => ab(a)))
+        this.map2(fgab, fga)((gab, ga) => gab(ga))
+    }
+  }
+
+  //12.12
+  def sequenceMap[K,V](ofa: Map[K,F[V]]): F[Map[K,V]] =
+    ofa.keys.foldRight(unit(Map[K,V]()))((k, m) => map2(m, ofa(k))((acc, elem) => acc + (k -> elem)))
 }
 
 case class Tree[+A](head: A, tail: List[Tree[A]])
@@ -50,7 +85,13 @@ trait Monad[F[_]] extends Applicative[F] {
 }
 
 object Monad {
-  def eitherMonad[E]: Monad[({type f[x] = Either[E, x]})#f] = ???
+
+  // 12.5
+  def eitherMonad[E]: Monad[({type f[x] = Either[E, x]})#f] = new Monad[({type f[x] = Either[E, x]})#f] {
+    def unit[A](a: => A): Either[E, A] = Right(a)
+    override def flatMap[A,B](e: Either[E, A])(f: A => Either[E, B]): Either[E, B] = 
+      e flatMap f
+  }
 
   def stateMonad[S] = new Monad[({type f[x] = State[S, x]})#f] {
     def unit[A](a: => A): State[S, A] = State(s => (a, s))
@@ -58,8 +99,14 @@ object Monad {
       st flatMap f
   }
 
+  //12.20 from solution
   def composeM[F[_],N[_]](implicit F: Monad[F], N: Monad[N], T: Traverse[N]):
-    Monad[({type f[x] = F[N[x]]})#f] = ???
+    Monad[({type f[x] = F[N[x]]})#f] = new Monad[({type f[x] = F[N[x]]})#f] {
+      def unit[A](a: => A): F[N[A]] = F.unit(N.unit(a))
+      override def flatMap[A,B](fna: F[N[A]])(f: A => F[N[B]]): F[N[B]] = 
+        F.flatMap(fna)(na => F.map(T.traverse(na)(f(_)))(N.join))
+    }
+
 }
 
 sealed trait Validation[+E, +A]
@@ -82,7 +129,19 @@ object Applicative {
       a zip b map f.tupled
   }
 
-  def validationApplicative[E]: Applicative[({type f[x] = Validation[E,x]})#f] = ???
+  //12.6
+  def validationApplicative[E]: Applicative[({type f[x] = Validation[E,x]})#f] =
+    new Applicative[({type f[x] = Validation[E,x]})#f] {
+      def unit[A](a: => A) = Success(a)
+
+      override def map2[A,B,C](a: Validation[E, A], b: Validation[E, B])(f: (A, B) => C) =
+        (a, b) match {
+          case (Success(aa), Success(bb)) => Success(f(aa, bb))
+          case (Success(_), Failure(h1, t1)) => Failure(h1, t1)
+          case (Failure(h1, t1), Success(_)) => Failure(h1, t1)
+          case (Failure(h1, t1), Failure(h2, t2)) => Failure(h1, t1 ++ Vector(h2) ++ t2)
+        }
+  }
 
   type Const[A, B] = A
 
@@ -99,7 +158,18 @@ trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
   def sequence[G[_]:Applicative,A](fma: F[G[A]]): G[F[A]] =
     traverse(fma)(ma => ma)
 
-  def map[A,B](fa: F[A])(f: A => B): F[B] = ???
+
+  type Id[A] = A
+
+  val idMonad = new Monad[Id] {
+    def unit[A](a: => A) = a
+    override def flatMap[A,B](a: A)(f: A => B): B = f(a)
+  }
+
+  //12.14 from solution (?? why Monad)
+  def map[A,B](fa: F[A])(f: A => B): F[B] = {
+    traverse[Id, A, B](fa)(f)(idMonad)
+  }
 
   import Applicative._
 
@@ -123,22 +193,51 @@ trait Traverse[F[_]] extends Functor[F] with Foldable[F] {
   def zipWithIndex[A](fa: F[A]): F[(A, Int)] =
     mapAccum(fa, 0)((a, s) => ((a, s), s + 1))._1
 
-  def reverse[A](fa: F[A]): F[A] = ???
+  //12.16
+  def reverse[A](fa: F[A]): F[A] = mapAccum(fa, toList(fa).reverse)((a, s) => (s.head, s.tail))._1
 
-  override def foldLeft[A,B](fa: F[A])(z: B)(f: (B, A) => B): B = ???
+  //12.17
+  override def foldLeft[A,B](fa: F[A])(z: B)(f: (B, A) => B): B =
+    mapAccum(fa, z)((a, s) => ((), f(s, a)))._2
 
+  //12.18 from solution
   def fuse[G[_],H[_],A,B](fa: F[A])(f: A => G[B], g: A => H[B])
-                         (implicit G: Applicative[G], H: Applicative[H]): (G[F[B]], H[F[B]]) = ???
+                         (implicit G: Applicative[G], H: Applicative[H]): (G[F[B]], H[F[B]]) =
+    traverse[({type f[x] = (G[x], H[x])})#f, A, B](fa)(a => (f(a), g(a)))(G product H)
 
-  def compose[G[_]](implicit G: Traverse[G]): Traverse[({type f[x] = F[G[x]]})#f] = ???
+  //12.19
+  def compose[G[_]](implicit G: Traverse[G]): Traverse[({type f[x] = F[G[x]]})#f] = {
+     val self = this
+      new Traverse[({type f[x] = F[G[x]]})#f] {
+        override def traverse[H[_],A,B](fa: F[G[A]])(f: A => H[B])(implicit H: Applicative[H]) =
+          self.traverse(fa)(G.traverse(_)(f))
+    }
+  }
 }
 
 object Traverse {
-  val listTraverse = ???
 
-  val optionTraverse = ???
+  //12.13
+  val listTraverse = new Traverse[List] {
+    override def traverse[G[_],A,B](fa: List[A])(f: A => G[B])(implicit G: Applicative[G]): G[List[B]] =
+      fa.foldRight(G.unit(List[B]()))((a, fbs) => G.map2(f(a), fbs)(_ :: _))
+  }
 
-  val treeTraverse = ???
+  val optionTraverse = new Traverse[Option] {
+    override def traverse[G[_],A,B](fa: Option[A])(f: A => G[B])(implicit G: Applicative[G]): G[Option[B]] =
+      fa match {
+        case Some(a) => G.map(f(a))(Some(_))
+        case None => G.unit(None)
+      }
+  }
+
+  val treeTraverse = new Traverse[Tree] {
+    override def traverse[G[_],A,B](fa: Tree[A])(f: A => G[B])(implicit G: Applicative[G]): G[Tree[B]] =
+      G.map2(
+        f(fa.head),
+        listTraverse.traverse(fa.tail)((t: Tree[A]) => traverse(t)(f))
+      )(Tree(_, _))
+  }
 }
 
 // The `get` and `set` functions on `State` are used above,
