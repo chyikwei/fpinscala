@@ -133,10 +133,19 @@ object SimpleStreamTransducers {
       case Await(recv) => Await(recv andThen (_ flatMap f))
     }
 
+    //15.5
     /*
      * Exercise 5: Implement `|>`. Let the types guide your implementation.
      */
-    def |>[O2](p2: Process[O,O2]): Process[I,O2] = ???
+    def |>[O2](p2: Process[O,O2]): Process[I,O2] = p2 match {
+      case Halt() => Halt()
+      case Emit(h, t) => Emit(h, this |> t)
+      case Await(recv) => this match {
+        case Halt()  => Halt() |> recv(None)
+        case Emit(h, t) => t |> recv(Some(h))
+        case Await(r2) => Await(i => r2(i) |> p2)
+      }
+    }
 
     /*
      * Feed `in` to this `Process`. Uses a tail recursive loop as long
@@ -197,10 +206,21 @@ object SimpleStreamTransducers {
     def filter(f: O => Boolean): Process[I,O] =
       this |> Process.filter(f)
 
+    //15.6
     /*
      * Exercise 6: Implement `zipWithIndex`.
      */
-    def zipWithIndex: Process[I,(O,Int)] = ???
+    def zipWithIndex: Process[I,(O,Int)] = {
+      def go(n: Int, p: Process[I, O]): Process[I,(O,Int)] = p match {
+        case Halt() => Halt()
+        case Emit(h, t) => Emit((h, n), go(n+1, t))
+        case Await(recv) => Await {
+          case None => go(n, recv(None))
+          case i => go(n, recv(i))
+        }
+      }
+      go(0, this)
+    }
 
     /* Add `p` to the fallback branch of this process */
     def orElse(p: Process[I,O]): Process[I,O] = this match {
@@ -289,24 +309,49 @@ object SimpleStreamTransducers {
       go(0.0)
     }
 
+    //15.1
     /*
      * Exercise 1: Implement `take`, `drop`, `takeWhile`, and `dropWhile`.
      */
-    def take[I](n: Int): Process[I,I] = ???
+    def take[I](n: Int): Process[I,I] =
+      if (n <= 0) Halt()
+      else await(i => emit(i, take[I](n-1)))
 
-    def drop[I](n: Int): Process[I,I] = ???
+    def drop[I](n: Int): Process[I,I] =
+      if (n <= 0) id
+      else await(i => drop[I](n-1))
 
-    def takeWhile[I](f: I => Boolean): Process[I,I] = ???
+    def takeWhile[I](f: I => Boolean): Process[I,I] =
+      await(i =>
+        if(f(i))
+          emit(i, takeWhile[I](f))
+        else
+          Halt()
+      )
 
-    def dropWhile[I](f: I => Boolean): Process[I,I] = ???
+    def dropWhile[I](f: I => Boolean): Process[I,I] =
+      await(i =>
+        if(f(i))
+          dropWhile[I](f)
+        else
+          emit(i, id)
+      )
 
     /* The identity `Process`, just repeatedly echos its input. */
     def id[I]: Process[I,I] = lift(identity)
 
+    //15.2
     /*
      * Exercise 2: Implement `count`.
      */
-    def count[I]: Process[I,Int] = ???
+    def count[I]: Process[I,Int] = {
+      def go(cnt: Int): Process[I, Int] =
+        Await {
+          case Some(_) => Emit(cnt+1, go(cnt+1))
+          case None => Halt()
+        }
+      go(0)
+    }
 
     /* For comparison, here is an explicit recursive implementation. */
     def count2[I]: Process[I,Int] = {
@@ -318,24 +363,48 @@ object SimpleStreamTransducers {
     /*
      * Exercise 3: Implement `mean`.
      */
-    def mean: Process[Double,Double] = ???
+    def mean: Process[Double,Double] = {
+      def go(total: Double, cnt:Double): Process[Double, Double] =
+        Await {
+          case Some(d) => Emit((total+d)/(cnt+1), go(total+d,cnt+1))
+          case None => Halt()
+        }
+      go(0.0, 0.0)
+    }
 
     def loop[S,I,O](z: S)(f: (I,S) => (O,S)): Process[I,O] =
       await((i: I) => f(i,z) match {
         case (o,s2) => emit(o, loop(s2)(f))
       })
 
+    //15.4
     /* Exercise 4: Implement `sum` and `count` in terms of `loop` */
+    def sum2: Process[Double,Double] = loop(0.0)(
+      (d, total) => ((total+d), (total+d))
+    )
 
-    def sum2: Process[Double,Double] = ???
+    def count3[I]: Process[I,Int] = loop(0)(
+      (d, total) => (total+1, total+1)
+    )
 
-    def count3[I]: Process[I,Int] = ???
-
+    //15.7 from solution
     /*
      * Exercise 7: Can you think of a generic combinator that would
      * allow for the definition of `mean` in terms of `sum` and
      * `count`?
      */
+    def zip[A,B,C](p1: Process[A,B], p2: Process[A,C]): Process[A,(B,C)] =
+      (p1, p2) match {
+        case (Halt(), _) => Halt()
+        case (_, Halt()) => Halt()
+        case (Emit(b, t1), Emit(c, t2)) => Emit((b,c), zip(t1, t2))
+        case (Await(recv), _) => Await(
+          (oa: Option[A]) => zip(recv(oa), feed(oa)(p2))
+        )
+        case (_, Await(recv)) => Await(
+          (oa: Option[A]) => zip(feed(oa)(p1), recv(oa))
+        )
+      }
 
     def feed[A,B](oa: Option[A])(p: Process[A,B]): Process[A,B] =
       p match {
@@ -344,19 +413,24 @@ object SimpleStreamTransducers {
         case Await(recv) => recv(oa)
       }
 
+    def mean2: Process[Double, Double] =
+      zip(sum, count[Double]) |> lift { case (s, c) => s / c}
+
     /*
      * Exercise 6: Implement `zipWithIndex`.
      *
      * See definition on `Process` above.
      */
 
+    //15.8
     /*
      * Exercise 8: Implement `exists`
      *
      * We choose to emit all intermediate values, and not halt.
      * See `existsResult` below for a trimmed version.
      */
-    def exists[I](f: I => Boolean): Process[I,Boolean] = ???
+    def exists[I](f: I => Boolean): Process[I,Boolean] =
+      lift(f) |> loop(false)((i, s) => ((i || s), (i || s)))
 
     /* Awaits then emits a single value, then halts. */
     def echo[I]: Process[I,I] = await(i => emit(i))
@@ -385,10 +459,16 @@ object SimpleStreamTransducers {
       finally s.close
     }
 
+    //15.9
     /*
      * Exercise 9: Write a program that reads degrees fahrenheit as `Double` values from a file,
      * converts each temperature to celsius, and writes results to another file.
      */
+    def toCelsiusFile(f: java.io.File) = processFile(f, toCelsiusP, List[String]())(_ ++ List(_))
+
+    def toCelsiusP: Process[String, String] =
+      filter[String](line => !line.startsWith("#") || line.trim.length > 0) |>
+        lift { x: String => toCelsius(x.toDouble).toString }
 
     def toCelsius(fahrenheit: Double): Double =
       (5.0 / 9.0) * (fahrenheit - 32.0)
@@ -497,13 +577,26 @@ object GeneralizedStreamTransducers {
       }
     }
 
+    //15.10 from solution
     /*
      * Exercise 10: This function is defined only if given a `MonadCatch[F]`.
      * Unlike the simple `runLog` interpreter defined in the companion object
      * below, this is not tail recursive and responsibility for stack safety
      * is placed on the `Monad` instance.
      */
-    def runLog(implicit F: MonadCatch[F]): F[IndexedSeq[O]] = ???
+    def runLog(implicit F: MonadCatch[F]): F[IndexedSeq[O]] = {
+
+      def go(cur: Process[F, O], acc: IndexedSeq[O]): F[IndexedSeq[O]] = {
+        cur match {
+          case Emit(h, t) => go(t, acc :+ h)
+          case Halt(End) => F.unit(acc)
+          case Halt(err) => F.fail(err)
+          case Await(req, recv) =>
+            F.flatMap (F.attempt(req)) (e => go(Try(recv(e)), acc))
+        }
+      }
+      go(this, IndexedSeq())
+    }
 
     /*
      * We define `Process1` as a type alias - see the companion object
@@ -743,11 +836,21 @@ object GeneralizedStreamTransducers {
         }
         { src => eval_ { IO(src.close) } }
 
+    //15.11
     /* Exercise 11: Implement `eval`, `eval_`, and use these to implement `lines`. */
-    def eval[F[_],A](a: F[A]): Process[F,A] = ???
+    def eval[F[_],A](a: F[A]): Process[F,A] =
+      await(a) {
+        case Left(err) => Halt(err)
+        case Right(x) => Emit(x, Halt(End))
+      }
+
 
     /* Evaluate the action purely for its effects. */
-    def eval_[F[_],A,B](a: F[A]): Process[F,B] = ???
+    def eval_[F[_],A,B](a: F[A]): Process[F,B] =
+      await(a) {
+        case Left(err) => Halt(err)
+        case Right(x) => Halt(End)
+      }
 
     /* Helper function with better type inference. */
     def evalIO[A](a: IO[A]): Process[IO,A] =
@@ -907,9 +1010,10 @@ object GeneralizedStreamTransducers {
     def constant[A](a: A): Process[IO,A] =
       eval(IO(a)).flatMap { a => Emit(a, constant(a)) }
 
+    //15.12
     /* Exercise 12: Implement `join`. Notice this is the standard monadic combinator! */
-    def join[F[_],A](p: Process[F,Process[F,A]]): Process[F,A] = ???
-
+    def join[F[_],A](p: Process[F,Process[F,A]]): Process[F,A] =
+      p flatMap (x => x)
     /*
      * An example use of the combinators we have so far: incrementally
      * convert the lines of a file from fahrenheit to celsius.
